@@ -1,175 +1,220 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-    <meta charset="UTF-8" />
-    <title>世界の地震アニメーション（Plotly）</title>
-    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 0;
-            background: #f4f4f4;
-        }
-        #title {
-            padding: 15px;
-            background: #333;
-            color: white;
-            text-align: center;
-            font-size: 22px;
-        }
-        #map {
-            width: 100%;
-            height: 90vh;
-        }
-    </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>世界の地震アニメーション（Leaflet TimeDimension）</title>
+
+<!-- Leaflet -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<!-- TimeDimension -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet-timedimension/1.1.0/leaflet.timedimension.control.min.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-timedimension/1.1.0/leaflet.timedimension.min.js"></script>
+
+<!-- optional moment (used for formatting) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
+
+<style>
+  html,body,#map { height: 100%; margin: 0; padding: 0; }
+  #map { width: 100%; height: 100vh; }
+  .legend {
+    background: white;
+    padding: 8px 10px;
+    border:1px solid #444;
+    border-radius:6px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+    font-size:13px;
+    line-height:1.4;
+  }
+  .legend .swatch {
+    display:inline-block;
+    width:14px;
+    height:14px;
+    border-radius:7px;
+    margin-right:6px;
+    vertical-align:middle;
+  }
+  .td-controls { position: absolute; left:50px; top:8px; z-index:1000; }
+</style>
 </head>
 <body>
-
-<div id="title">
-    🌍 過去30日の世界の地震アニメーション（深さ × 色、M × サイズ）
-</div>
-
 <div id="map"></div>
 
 <script>
-// USGS CSV（過去30日の全地震）
-const url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_month.csv";
+(async function(){
 
-// 深さ → 色（浅い = 赤、深い = 青）
-function depthColor(depth) {
+  // ---- 設定 ----
+  // USGS GeoJSON（過去30日分）
+  const GEOJSON_URL = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_month.geojson";
+
+  // 1フレームの刻み（ms） - 6時間
+  const STEP_MS = 6 * 3600 * 1000;
+
+  // 深さ->色（0km=赤, 700km=青）の補助関数
+  function depthColor(depth) {
     const d = Math.min(Math.max(depth / 700, 0), 1);
-    const r = Math.floor(255 * (1 - d));
-    const g = Math.floor(80 * (1 - d));
-    const b = Math.floor(255 * d);
-    return `rgb(${r},${g},${b})`;
-}
+    const r = Math.round(255 * (1 - d));
+    const g = Math.round(80 * (1 - d));
+    const b = Math.round(255 * d);
+    return `rgba(${r},${g},${b},0.85)`;
+  }
 
-// CSVを読み込んで処理開始
-fetch(url)
-    .then(res => res.text())
-    .then(csv => {
-        const lines = csv.split("\n");
-        const header = lines[0].split(",");
+  // マグニチュード->半径
+  function magToRadius(m) {
+    if (m == null || isNaN(m)) return 3;
+    return 2 + m * 2;
+  }
 
-        const timeIdx = header.indexOf("time");
-        const latIdx = header.indexOf("latitude");
-        const lonIdx = header.indexOf("longitude");
-        const depthIdx = header.indexOf("depth");
-        const magIdx = header.indexOf("mag");
+  // fetch GeoJSON
+  const res = await fetch(GEOJSON_URL);
+  const feed = await res.json();
 
-        let data = [];
+  // convert features to include 'times' array (TimeDimension expects ISO strings)
+  // and attach popup HTML + style info
+  const features = feed.features.map(f => {
+    const props = f.properties || {};
+    const coords = f.geometry && f.geometry.coordinates;
+    const lon = coords ? coords[0] : null;
+    const lat = coords ? coords[1] : null;
+    const depth = coords ? coords[2] : (props.depth || 0);
+    const timeMs = props.time || props.magTime || null;
+    const mag = props.mag;
 
-        for (let i = 1; i < lines.length; i++) {
-            const cols = lines[i].split(",");
-            if (cols.length < 5) continue;
+    // round time down to nearest 6 hours so frames match your earlier code
+    let times = [];
+    if (timeMs) {
+      const t = new Date(timeMs);
+      const floored = new Date(Math.floor(t.getTime() / STEP_MS) * STEP_MS);
+      times = [ floored.toISOString() ];
+    }
 
-            const t = new Date(cols[timeIdx]);
-            if (isNaN(t)) continue;
+    const popupHtml = `
+      <div style="min-width:180px;">
+        <b>${props.place || "不明な場所"}</b><br>
+        <b>マグニチュード:</b> ${mag ?? "N/A"}<br>
+        <b>深さ:</b> ${depth ?? "N/A"} km<br>
+        <b>発生時刻:</b> ${ timeMs ? new Date(timeMs).toLocaleString() : "N/A" }<br>
+        <small style="color:#666">ID: ${props.code || props.id || ""}</small>
+      </div>
+    `;
 
-            data.push({
-                time: t,
-                lat: parseFloat(cols[latIdx]),
-                lon: parseFloat(cols[lonIdx]),
-                depth: parseFloat(cols[depthIdx]),
-                mag: parseFloat(cols[magIdx])
-            });
-        }
+    return {
+      type: "Feature",
+      geometry: {
+        type: "Point",
+        coordinates: [lon, lat]
+      },
+      properties: Object.assign({}, props, {
+        times: times,
+        _style: {
+          radius: magToRadius(mag),
+          fillColor: depthColor(depth),
+          color: depthColor(depth),
+          fillOpacity: 0.8
+        },
+        _popup: popupHtml
+      })
+    };
+  });
 
-        // 時間順にソート
-        data.sort((a, b) => a.time - b.time);
+  const geojson = { type: "FeatureCollection", features: features };
 
-        // アニメーションフレーム用
-        const frames = [];
-        const sliderSteps = [];
+  // ---- Leaflet 地図 ----
+  const map = L.map('map', {
+    center: [20, 0],
+    zoom: 2
+  });
 
-        // 6時間刻みにまとめる
-        const stepMs = 6 * 3600 * 1000;
-        const t0 = data[0].time.getTime();
-        const tEnd = data[data.length - 1].time.getTime();
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OpenStreetMap & CartoDB'
+  }).addTo(map);
 
-        for (let t = t0; t <= tEnd; t += stepMs) {
-            const frameTime = new Date(t);
-            const next = new Date(t + stepMs);
-
-            const subset = data.filter(
-                d => d.time >= frameTime && d.time < next
-            );
-
-            frames.push({
-                name: frameTime.toISOString(),
-                data: [{
-                    type: "scattergeo",
-                    mode: "markers",
-                    lat: subset.map(d => d.lat),
-                    lon: subset.map(d => d.lon),
-                    text: subset.map(
-                        d => `M${d.mag} 深さ:${d.depth}km<br>${d.time.toLocaleString()}`
-                    ),
-                    marker: {
-                        size: subset.map(d => 2 + d.mag * 2),
-                        color: subset.map(d => depthColor(d.depth)),
-                        opacity: 0.7
-                    }
-                }]
-            });
-
-            sliderSteps.push({
-                label: frameTime.toLocaleString(),
-                method: "animate",
-                args: [[frameTime.toISOString()], {frame: {duration: 0}, mode: "immediate"}]
-            });
-        }
-
-        // 初期フレーム
-        const initial = frames[0].data;
-
-        const layout = {
-            geo: {
-                scope: "world",
-                projection: { type: "natural earth" }
-            },
-            margin: { t: 0 },
-            sliders: [{
-                pad: { t: 30 },
-                steps: sliderSteps
-            }],
-            updatemenus: [{
-                type: "buttons",
-                x: 0.1,
-                y: 0,
-                direction: "right",
-                buttons: [
-                    {
-                        label: "▶ 再生",
-                        method: "animate",
-                        args: [null, {fromcurrent: true, frame: {duration: 200}}]
-                    },
-                    {
-                        label: "⏸ 一時停止",
-                        method: "animate",
-                        args: [[null], {mode: "immediate"}]
-                    }
-                ]
-            }]
-        };
-
-        Plotly.newPlot("map", initial, layout).then(() => {
-            Plotly.addFrames("map", frames);
-        });
-
+  // ---- GeoJSON Layer を作る（points -> CircleMarker） ----
+  function pointToLayer(feature, latlng) {
+    const s = feature.properties && feature.properties._style;
+    return L.circleMarker(latlng, {
+      radius: s ? s.radius : 4,
+      fillColor: s ? s.fillColor : '#f03',
+      color: s ? s.color : '#f03',
+      weight: 0.5,
+      fillOpacity: s ? s.fillOpacity : 0.8
     });
-</script>
+  }
 
-</body>
-</html>
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>世界の地震アニメーション (Plotly)</title>
-</head>
-<body>
-    <div id="map"></div>
+  function onEachFeature(feature, layer) {
+    if (feature.properties && feature.properties._popup) {
+      layer.bindPopup(feature.properties._popup);
+    }
+  }
+
+  const geoJsonLayer = L.geoJson(geojson, {
+    pointToLayer: pointToLayer,
+    onEachFeature: onEachFeature
+  });
+
+  // ---- TimeDimension Layer を作成して追加 ----
+  const td = new L.TimeDimension({
+    period: "PT6H"  // 6時間刻み
+  });
+  map.timeDimension = td;
+
+  const tdLayer = L.timeDimension.layer.geoJson(geoJsonLayer, {
+    updateTimeDimension: true,
+    addlastPoint: false,
+    duration: "P1M" // 1か月でフェードアウト（元の Folium と同様）
+  });
+
+  tdLayer.addTo(map);
+
+  // コントロール（再生ボタン・スライダー）を追加
+  const playerControl = new L.Control.TimeDimension({
+    position: 'bottomleft',
+    autoPlay: true,
+    loopButton: true,
+    playButton: true,
+    timeSliderDragUpdate: true,
+    speedSlider: true
+  });
+  map.addControl(playerControl);
+
+  // ---- 凡例（右上） ----
+  const legend = L.control({position: 'topright'});
+  legend.onAdd = function(map) {
+    const div = L.DomUtil.create('div', 'legend');
+    div.innerHTML = `
+      <b>深さの凡例</b><br>
+      <div style="margin-top:6px;">
+        <span class="swatch" style="background: rgba(255,0,0,0.9)"></span> 浅い (0 km)<br>
+        <span class="swatch" style="background: rgba(200,80,200,0.9)"></span> 中間 (≈350 km)<br>
+        <span class="swatch" style="background: rgba(0,60,255,0.9)"></span> 深い (700 km)<br>
+      </div>
+      <div style="margin-top:8px;"><b>サイズ</b> = マグニチュード</div>
+    `;
+    return div;
+  };
+  legend.addTo(map);
+
+  // ---- タイム表示（地図左上に現在のフレーム時刻を表示） ----
+  const timeDisplay = L.control({position: 'topcenter'});
+  timeDisplay.onAdd = function(map) {
+    const div = L.DomUtil.create('div', 'td-controls');
+    div.innerHTML = '<div id="timeLabel" class="legend" style="background:transparent;border:none;font-weight:bold;"></div>';
+    return div;
+  };
+  timeDisplay.addTo(map);
+
+  // timechange イベントでラベル更新
+  map.timeDimension.on('timeload', function(data){
+    const times = map.timeDimension.getAvailableTimes();
+    const current = map.timeDimension.getCurrentTime();
+    const el = document.getElementById('timeLabel');
+    if (el && current) el.innerText = '時刻: ' + new Date(current).toLocaleString();
+  });
+
+  // ---- 完 ----
+})();
+</script>
 </body>
 </html>
