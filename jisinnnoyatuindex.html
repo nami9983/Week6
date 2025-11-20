@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8" />
+    <title>世界の地震アニメーション（Plotly）</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: #f4f4f4;
+        }
+        #title {
+            padding: 15px;
+            background: #333;
+            color: white;
+            text-align: center;
+            font-size: 22px;
+        }
+        #map {
+            width: 100%;
+            height: 90vh;
+        }
+    </style>
+</head>
+<body>
+
+<div id="title">
+    🌍 過去30日の世界の地震アニメーション（深さ × 色、M × サイズ）
+</div>
+
+<div id="map"></div>
+
+<script>
+// USGS CSV（過去30日の全地震）
+const url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_month.csv";
+
+// 深さ → 色（浅い = 赤、深い = 青）
+function depthColor(depth) {
+    const d = Math.min(Math.max(depth / 700, 0), 1);
+    const r = Math.floor(255 * (1 - d));
+    const g = Math.floor(80 * (1 - d));
+    const b = Math.floor(255 * d);
+    return `rgb(${r},${g},${b})`;
+}
+
+// CSVを読み込んで処理開始
+fetch(url)
+    .then(res => res.text())
+    .then(csv => {
+        const lines = csv.split("\n");
+        const header = lines[0].split(",");
+
+        const timeIdx = header.indexOf("time");
+        const latIdx = header.indexOf("latitude");
+        const lonIdx = header.indexOf("longitude");
+        const depthIdx = header.indexOf("depth");
+        const magIdx = header.indexOf("mag");
+
+        let data = [];
+
+        for (let i = 1; i < lines.length; i++) {
+            const cols = lines[i].split(",");
+            if (cols.length < 5) continue;
+
+            const t = new Date(cols[timeIdx]);
+            if (isNaN(t)) continue;
+
+            data.push({
+                time: t,
+                lat: parseFloat(cols[latIdx]),
+                lon: parseFloat(cols[lonIdx]),
+                depth: parseFloat(cols[depthIdx]),
+                mag: parseFloat(cols[magIdx])
+            });
+        }
+
+        // 時間順にソート
+        data.sort((a, b) => a.time - b.time);
+
+        // アニメーションフレーム用
+        const frames = [];
+        const sliderSteps = [];
+
+        // 6時間刻みにまとめる
+        const stepMs = 6 * 3600 * 1000;
+        const t0 = data[0].time.getTime();
+        const tEnd = data[data.length - 1].time.getTime();
+
+        for (let t = t0; t <= tEnd; t += stepMs) {
+            const frameTime = new Date(t);
+            const next = new Date(t + stepMs);
+
+            const subset = data.filter(
+                d => d.time >= frameTime && d.time < next
+            );
+
+            frames.push({
+                name: frameTime.toISOString(),
+                data: [{
+                    type: "scattergeo",
+                    mode: "markers",
+                    lat: subset.map(d => d.lat),
+                    lon: subset.map(d => d.lon),
+                    text: subset.map(
+                        d => `M${d.mag} 深さ:${d.depth}km<br>${d.time.toLocaleString()}`
+                    ),
+                    marker: {
+                        size: subset.map(d => 2 + d.mag * 2),
+                        color: subset.map(d => depthColor(d.depth)),
+                        opacity: 0.7
+                    }
+                }]
+            });
+
+            sliderSteps.push({
+                label: frameTime.toLocaleString(),
+                method: "animate",
+                args: [[frameTime.toISOString()], {frame: {duration: 0}, mode: "immediate"}]
+            });
+        }
+
+        // 初期フレーム
+        const initial = frames[0].data;
+
+        const layout = {
+            geo: {
+                scope: "world",
+                projection: { type: "natural earth" }
+            },
+            margin: { t: 0 },
+            sliders: [{
+                pad: { t: 30 },
+                steps: sliderSteps
+            }],
+            updatemenus: [{
+                type: "buttons",
+                x: 0.1,
+                y: 0,
+                direction: "right",
+                buttons: [
+                    {
+                        label: "▶ 再生",
+                        method: "animate",
+                        args: [null, {fromcurrent: true, frame: {duration: 200}}]
+                    },
+                    {
+                        label: "⏸ 一時停止",
+                        method: "animate",
+                        args: [[null], {mode: "immediate"}]
+                    }
+                ]
+            }]
+        };
+
+        Plotly.newPlot("map", initial, layout).then(() => {
+            Plotly.addFrames("map", frames);
+        });
+
+    });
+</script>
+
+</body>
+</html>
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>世界の地震アニメーション (Plotly)</title>
+</head>
+<body>
+    <div id="map"></div>
+</body>
+</html>
