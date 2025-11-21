@@ -1,165 +1,288 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-<meta charset="UTF-8">
-<title>世界の地震アニメーション（6時間ごと）</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>地震アニメ（CSV → 6時間刻み・M≥3.0）</title>
 
 <!-- Leaflet -->
-<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
-<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
 <!-- TimeDimension -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet-timedimension/dist/leaflet.timedimension.control.min.css" />
-<script src="https://cdn.jsdelivr.net/npm/leaflet-timedimension/dist/leaflet.timedimension.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet-timedimension@1.1.0/dist/leaflet.timedimension.control.min.css" />
+<script src="https://cdn.jsdelivr.net/npm/leaflet-timedimension@1.1.0/dist/leaflet.timedimension.min.js"></script>
 
-<!-- jQuery（地震リスト用） -->
+<!-- jQuery (軽いDOM用) -->
 <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 
 <style>
-  html, body { height: 100%; margin: 0; }
-  #map { width: 70%; height: 100%; float: left; }
-  #list { width: 30%; height: 100%; float: left; overflow-y: scroll; border-left: 2px solid #ccc; padding: 10px; }
+  html,body { height:100%; margin:0; }
+  #map { position:absolute; left:0; top:0; right:0; bottom:0; }
+  /* 右上に重ねる地震リスト */
+  #eq-list {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 360px;
+    max-height: 46%;
+    background: rgba(255,255,255,0.92);
+    border: 1px solid #bbb;
+    border-radius: 8px;
+    overflow-y: auto;
+    padding: 8px;
+    z-index: 4000;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    font-size: 13px;
+  }
+  #eq-list h3 { margin:4px 0 8px 0; font-size:15px; }
+  .eq-item { padding:6px 0; border-bottom:1px solid #eee; }
+  .eq-item:last-child{ border-bottom: none; }
+  .eq-item:hover{ background:#f6f6f6; cursor:pointer; }
 
-  /* TimeDimension UI を最前面へ */
-  .leaflet-control-timecontrol {
-      z-index: 2000 !important;
+  /* Legend */
+  #legend {
+    position:absolute;
+    top:12px;
+    left:12px;
+    z-index:4000;
+    background: rgba(255,255,255,0.9);
+    padding:8px 10px;
+    border-radius:6px;
+    border:1px solid #ccc;
+    font-size:13px;
   }
 
-  table { width: 100%; border-collapse: collapse; }
-  th, td { padding: 6px; border-bottom: 1px solid #aaa; }
-  th { background: #eee; }
-</style>
+  /* TimeDimension UI front */
+  .leaflet-control-timecontrol { z-index: 5000 !important; }
 
+  /* responsive for small screens */
+  @media (max-width:900px){
+    #eq-list { width: 46%; max-height: 40%; font-size:12px; right:8px; }
+  }
+</style>
 </head>
 <body>
 
 <div id="map"></div>
-<div id="list">
-  <h2>地震リスト（30日・M3+）</h2>
-  <table id="eqTable">
-    <thead>
-      <tr><th>日時(JST)</th><th>M</th><th>深さkm</th><th>場所</th></tr>
-    </thead>
-    <tbody></tbody>
-  </table>
+
+<div id="legend">
+  <b>深さの凡例</b><br>
+  <div style="margin-top:6px;"><span style="display:inline-block;width:12px;height:12px;background:#ff3b30;border-radius:6px;margin-right:6px;"></span>浅い (0–70 km)</div>
+  <div style="margin-top:4px;"><span style="display:inline-block;width:12px;height:12px;background:#ffcc33;border-radius:6px;margin-right:6px;"></span>中 (70–300 km)</div>
+  <div style="margin-top:4px;"><span style="display:inline-block;width:12px;height:12px;background:#3366ff;border-radius:6px;margin-right:6px;"></span>深い (300+ km)</div>
+</div>
+
+<div id="eq-list">
+  <h3>地震リスト（該当フレーム）</h3>
+  <div id="items">読み込み中...</div>
 </div>
 
 <script>
-// ==========================
-// ① データ取得（USGS）
-// ==========================
-const url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_month.geojson";
+/* ----------------------------
+   設定：CSV のパス（あなたの環境）
+   ----------------------------*/
+// 開発環境でアップロード済みのファイルパス（そのまま使います）
+const FILE_URL = "/mnt/data/earthquakes.csv";  // ← これを環境URLに置き換えてください（環境側で自動変換される想定）
 
-fetch(url)
-  .then(res => res.json())
-  .then(data => initMap(data));
+const MIN_MAG = 3.0;
+const STEP_MS = 6 * 3600 * 1000; // 6時間
+const TIME_PERIOD = "PT6H";
 
-// ==========================
-// ② 地図を作成
-// ==========================
-function initMap(geojson) {
+/* ----------------------------
+   ユーティリティ: CSV を単純パース（簡易） 
+   - 値にカンマを含む極端なCSVは対応外（今回のデータは標準形式想定）
+   ----------------------------*/
+async function fetchCSV(url){
+  const res = await fetch(url);
+  const txt = await res.text();
+  const lines = txt.split(/\r?\n/).filter(l => l.trim() !== "");
+  const header = lines[0].split(',');
+  const rows = lines.slice(1).map(line => {
+    const cols = line.split(',');
+    const obj = {};
+    for (let i=0;i<header.length;i++){ obj[header[i]] = cols[i]; }
+    return obj;
+  });
+  return { header, rows };
+}
 
-  const map = L.map('map', {
-      zoom: 2,
-      center: [20, 0],
-      timeDimension: true,
-      timeDimensionOptions: {
-          period: "PT6H"
+/* ----------------------------
+   CSV読み込み -> GeoJSON変換（times配列を6h丸めで追加）
+   ----------------------------*/
+function csvRowsToFeatures(rows){
+  const feats = [];
+  for (const r of rows) {
+    const mag = parseFloat(r.mag || r.Magnitude || r.magValue || r.MagnitudeValue || "NaN");
+    if (isNaN(mag) || mag < MIN_MAG) continue;
+    const lat = parseFloat(r.latitude || r.lat || r.Latitude);
+    const lon = parseFloat(r.longitude || r.lon || r.Longitude);
+    const depth = parseFloat(r.depth || r.Depth || r.depth_km || "NaN");
+    const timeStr = r.time || r.time_utc || r.Time || r.datetime || r.datetime_utc || r["time (utc)"];
+    if (!lat || !lon || !timeStr) continue;
+
+    const t = new Date(timeStr);
+    if (isNaN(t)) {
+      // Try parse numeric ms
+      const n = Number(timeStr);
+      if (!isNaN(n)) t.setTime(n);
+      else continue;
+    }
+    const floored = new Date(Math.floor(t.getTime() / STEP_MS) * STEP_MS).toISOString();
+
+    feats.push({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [lon, lat] },
+      properties: {
+        mag: mag,
+        depth: depth,
+        time: t.toISOString(),
+        time6h: floored,
+        place: r.place || r.place_name || r.location || r["place"] || ""
       }
+    });
+  }
+  return feats;
+}
+
+/* ----------------------------
+   Leaflet & TimeDimension 初期化
+   ----------------------------*/
+async function init(){
+  // 1) CSV読み込み
+  const csv = await fetchCSV(FILE_URL);
+  const feats = csvRowsToFeatures(csv.rows);
+
+  // 2) GeoJSON構成
+  const geo = { type: "FeatureCollection", features: feats };
+
+  // 3) Map
+  const map = L.map('map', {
+    center: [20,0], zoom: 2,
+    timeDimension: true,
+    timeDimensionOptions: { period: TIME_PERIOD }
   });
 
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: '© OpenStreetMap contributors'
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OpenStreetMap & CartoDB'
   }).addTo(map);
 
-  // 再生コントローラー
-  const timeControl = new L.Control.TimeDimension({
-      position: "bottomleft",
-      autoPlay: true,
-      loopButton: true,
-      speedSlider: true
-  });
+  // 4) レイヤー（深さごとに分ける） for toggle & performance
+  const shallow = { type:"FeatureCollection", features: geo.features.filter(f=> (f.properties.depth||0) < 70) };
+  const mid =     { type:"FeatureCollection", features: geo.features.filter(f=> (f.properties.depth||0) >=70 && (f.properties.depth||0) < 300) };
+  const deep =    { type:"FeatureCollection", features: geo.features.filter(f=> (f.properties.depth||0) >=300) };
 
-  map.addControl(timeControl);
-
-  // ==========================
-  // ③ マーカーの色とサイズ
-  // ==========================
-  function getColor(depth) {
-      if (depth < 70) return "red";
-      if (depth < 300) return "yellow";
-      return "blue";
-  }
-
-  function style(feature) {
-      return {
-          radius: 4 + feature.properties.mag * 2,
-          color: getColor(feature.geometry.coordinates[2]),
-          fillColor: getColor(feature.geometry.coordinates[2]),
-          fillOpacity: 0.6
-      };
-  }
-
-  // ==========================
-  // ④ GeoJSON → TimeDimensionLayer
-  // ==========================
-  const geoLayer = L.geoJson(geojson, {
-      pointToLayer: function(feature, latlng) {
-          return L.circleMarker(latlng, style(feature));
-      },
-      onEachFeature: function(feature, layer) {
-
-          // 日本時間へ
-          const jst = new Date(feature.properties.time + 9 * 3600 * 1000);
-          const jstStr = jst.toISOString().replace("T", " ").slice(0, 19);
-
-          const depth = feature.geometry.coordinates[2];
-          const mag = feature.properties.mag;
-          const place = feature.properties.place;
-
-          // ポップアップ
-          layer.bindPopup(
-              `<b>${place}</b><br>
-              日時(JST): ${jstStr}<br>
-              M: ${mag}<br>
-              深さ: ${depth} km`
-          );
-
-          // リストへ追加
-          addTableRow(jstStr, mag, depth, place, layer);
+  function makeGeoLayer(gjson){
+    return L.geoJson(gjson, {
+      pointToLayer: function(feature, latlng){
+        const d = feature.properties.depth;
+        const color = d < 70 ? "#ff3b30" : (d < 300 ? "#ffcc33" : "#3366ff");
+        const r = 3 + (feature.properties.mag||0) * 1.8;
+        return L.circleMarker(latlng, { radius: r, color: color, fillColor: color, fillOpacity: 0.8 }).bindPopup(
+          `<b>${(feature.properties.place||"不明")}</b><br>` +
+          `日時(JST): ${new Date(feature.properties.time).toLocaleString()}<br>` +
+          `M: ${feature.properties.mag}<br>` +
+          `深さ: ${feature.properties.depth} km`
+        );
       }
-  });
-
-  const tdLayer = L.timeDimension.layer.geoJson(geoLayer, {
-      updateTimeDimension: true,
-      addlastPoint: false
-  });
-
-  tdLayer.addTo(map);
-}
-
-// ==========================
-// ⑤ 地震リストを作成
-// ==========================
-function addTableRow(jst, mag, depth, place, layer) {
-    const row = `
-      <tr class="rowItem">
-          <td>${jst}</td>
-          <td>${mag}</td>
-          <td>${depth}</td>
-          <td>${place}</td>
-      </tr>
-    `;
-
-    $("#eqTable tbody").append(row);
-
-    // 行をクリック → 該当地点へ飛ぶ
-    $("#eqTable tbody tr:last").on("click", function() {
-        layer.openPopup();
     });
+  }
+
+  const shallowLayer = makeGeoLayer(shallow);
+  const midLayer = makeGeoLayer(mid);
+  const deepLayer = makeGeoLayer(deep);
+
+  const tdShallow = L.timeDimension.layer.geoJson(shallowLayer, { updateTimeDimension:true, duration: "PT6H" });
+  const tdMid     = L.timeDimension.layer.geoJson(midLayer, { updateTimeDimension:true, duration: "PT6H" });
+  const tdDeep    = L.timeDimension.layer.geoJson(deepLayer, { updateTimeDimension:true, duration: "PT6H" });
+
+  // add all by default
+  tdShallow.addTo(map); tdMid.addTo(map); tdDeep.addTo(map);
+
+  // 5) TimeDimension UI コントロール
+  const tdControl = new L.Control.TimeDimension({
+    position: 'bottomleft',
+    autoPlay: true,
+    loopButton: true,
+    timeSlider: true,
+    speedSlider: true,
+    playerOptions: { transitionTime: 1200, loop: true }
+  });
+  map.addControl(tdControl);
+
+  // 6) 地震リスト更新（現在フレームの items）
+  function updateListForTime(timeMs){
+    const iso = new Date(timeMs).toISOString();
+    const items = geo.features.filter(f => f.properties.time6h === iso);
+    const container = document.getElementById("items");
+    container.innerHTML = "";
+    if (items.length === 0) {
+      container.innerHTML = "<div>この時間帯の地震はありません</div>";
+      return;
+    }
+    // sort by mag desc
+    items.sort((a,b)=> (b.properties.mag||0) - (a.properties.mag||0) );
+    for (const it of items){
+      const div = document.createElement("div");
+      div.className = "eq-item";
+      div.innerHTML = `<b>${new Date(it.properties.time).toLocaleString()}</b><br>
+                       M ${it.properties.mag} / 深さ ${it.properties.depth} km<br>
+                       ${it.properties.place || ""}`;
+      div.onclick = ()=> {
+        // fly to and open popup
+        const lat = it.geometry.coordinates[1], lon = it.geometry.coordinates[0];
+        map.setView([lat, lon], Math.max(map.getZoom(),5));
+        // find layer marker and open popup: since layer instances created above, we just open a popup at latlng
+        L.popup({maxWidth:400})
+          .setLatLng([lat,lon])
+          .setContent(`<b>${it.properties.place||""}</b><br>
+                       日時(JST): ${new Date(it.properties.time).toLocaleString()}<br>
+                       M: ${it.properties.mag}<br>
+                       深さ: ${it.properties.depth} km`)
+          .openOn(map);
+      };
+      container.appendChild(div);
+    }
+  }
+
+  // listen time change
+  map.timeDimension.on('timeload', function(e){
+    // e.time is current time in ms
+    updateListForTime(e.time);
+  });
+
+  // initial list: first available time
+  const initTime = map.timeDimension.getCurrentTime();
+  updateListForTime(initTime || Date.now());
+
+  // 7) small controls: layer toggle buttons on legend area (add simple buttons)
+  const legend = document.getElementById("legend");
+  const btnRow = document.createElement("div");
+  btnRow.style.marginTop = "8px";
+  btnRow.innerHTML = `
+    <button id="b_s" style="margin-right:6px;">浅ON/OFF</button>
+    <button id="b_m" style="margin-right:6px;">中ON/OFF</button>
+    <button id="b_d">深ON/OFF</button>
+  `;
+  legend.appendChild(btnRow);
+  document.getElementById("b_s").onclick = ()=> { toggleLayer(tdShallow); };
+  document.getElementById("b_m").onclick = ()=> { toggleLayer(tdMid); };
+  document.getElementById("b_d").onclick = ()=> { toggleLayer(tdDeep); };
+
+  function toggleLayer(Layer){
+    if (map.hasLayer(Layer)) map.removeLayer(Layer);
+    else Layer.addTo(map);
+  }
+
+  // 8) performance note: ensure map fits world
+  map.fitWorld();
 }
 
+/* kick-off */
+init().catch(err=>{
+  console.error(err);
+  document.getElementById('items').innerText = "データ読み込みに失敗しました: " + (err.message || err);
+});
 </script>
-
 </body>
 </html>
