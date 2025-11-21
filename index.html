@@ -1,49 +1,44 @@
-import folium
-from folium.plugins import TimestampedGeoJson
 import pandas as pd
 import json
 
-# ==========================================================
-# 1. USGS 過去30日・M3.0以上のデータ取得
-# ==========================================================
-url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_month.csv"
+# ============================
+# 1. USGS 30日・M3.0+
+# ============================
+url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_month.csv"
 df = pd.read_csv(url)
 
-df["time"] = pd.to_datetime(df["time"], utc=True)
-df = df[df["mag"] >= 3.0].reset_index(drop=True)
+df = df[df["mag"] >= 3.0].copy()
 
+df["time"] = pd.to_datetime(df["time"])
 df["lat"] = df["latitude"]
 df["lon"] = df["longitude"]
 df["depth"] = df["depth"].fillna(0)
 df["mag"] = df["mag"].fillna(0)
 
-# 6時間刻みに丸め（TimeDimension）
+# 6時間に丸め（TimeDimension用）
 df["time_6h"] = df["time"].dt.floor("6H")
 
-# ==========================================================
-# 2. Z (UTC) 形式へ強制変換（これが最重要）
-# ==========================================================
-def to_td_time(t):
-    return t.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-# ==========================================================
-# 3. 色とサイズ
-# ==========================================================
+# ============================
+# 2. 深さ → 色
+# ============================
 def depth_color(d):
     if d < 70:
-        return "#ff0000"  # 赤
+        return "#ff0000"  # 浅い
     elif d < 300:
-        return "#ffaa00"  # 黄
+        return "#ffaa00"  # 中間
     else:
-        return "#0000ff"  # 青
+        return "#0000ff"  # 深い
 
 df["color"] = df["depth"].apply(depth_color)
-df["radius"] = df["mag"].apply(lambda m: 2 + m * 2)
 
-# ==========================================================
-# 4. GeoJSON 生成
-# ==========================================================
+# マーカーサイズ
+df["radius"] = df["mag"].apply(lambda m: 3 + m * 2)
+
+# ============================
+# 3. GeoJSON 化
+# ============================
 features = []
+
 for _, r in df.iterrows():
     features.append({
         "type": "Feature",
@@ -52,161 +47,35 @@ for _, r in df.iterrows():
             "coordinates": [r["lon"], r["lat"]],
         },
         "properties": {
-            "times": [to_td_time(r["time_6h"])],
-            "mag": float(r["mag"]),
-            "depth": float(r["depth"]),
+            "times": [r["time_6h"].isoformat()],
             "style": {
                 "color": r["color"],
                 "fillColor": r["color"],
-                "radius": r["radius"],
                 "fillOpacity": 0.7,
-                "weight": 1
+                "radius": r["radius"]
             },
-            "icon": "circle"
+            "mag": float(r["mag"]),
+            "depth": float(r["depth"])
         }
     })
 
-eq_json = json.dumps({
+eq_json = {
     "type": "FeatureCollection",
     "features": features
-})
-
-# ==========================================================
-# 5. HTML テンプレートに埋め込み（あなたのHTML）
-# ==========================================================
-html_template = """
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8" />
-<title>Earthquake Animation (JST + AutoPlay + Plates)</title>
-
-<!-- Leaflet -->
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-
-<!-- TimeDimension -->
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet-timedimension/1.1.0/leaflet.timedimension.control.min.css" />
-
-<style>
-html, body { margin:0; padding:0; height:100%; }
-#map { width:100%; height:100%; }
-
-.leaflet-control-container {
-    z-index: 9999 !important;
 }
 
-.legend {
-    position: absolute;
-    top: 10px;
-    right: 10px;
-    background: white;
-    padding: 10px;
-    border-radius: 6px;
-    font-size: 14px;
-    line-height: 1.3em;
-    box-shadow: 0 0 6px rgba(0,0,0,0.3);
-    z-index: 9999;
-}
-</style>
-</head>
+# JSON を文字列に
+eq_json_str = json.dumps(eq_json)
 
-<body>
-<div id="map"></div>
-<div class="legend">
-<b>深さ（Depth）</b><br>
-<span style="color:#ff0000;">●</span> 浅い（0–70km）<br>
-<span style="color:#ffaa00;">●</span> 中間（70–300km）<br>
-<span style="color:#0000ff;">●</span> 深い（300km+）<br>
-</div>
+# ============================
+# 4. HTML 読み込み → 埋め込み → 保存
+# ============================
+with open("template.html", "r", encoding="utf-8") as f:
+    html = f.read()
 
-<!-- scripts -->
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-timedimension/1.1.0/leaflet.timedimension.min.js"></script>
+html = html.replace("__EQ_JSON__", eq_json_str)
 
-<script>
+with open("eq_final.html", "w", encoding="utf-8") as f:
+    f.write(html)
 
-// =============================
-// 地図
-// =============================
-var map = L.map('map', {
-    zoom: 2,
-    center: [20, 0],
-    timeDimension: true,
-    timeDimensionControl: true,
-    timeDimensionControlOptions: {
-        autoPlay: true,
-        loopButton: true,
-        minSpeed: 1,
-        maxSpeed: 10,
-        speedStep: 1
-    }
-});
-
-L.tileLayer(
-    "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
-    { attribution: "CartoDB" }
-).addTo(map);
-
-// =============================
-// プレート境界
-// =============================
-fetch("https://raw.githubusercontent.com/fraxen/tectonicplates/master/GeoJSON/PB2002_boundaries.json")
-    .then(r => r.json())
-    .then(data => {
-        L.geoJSON(data, {
-            style: { color: "#ff00ff", weight: 2 }
-        }).addTo(map);
-    });
-
-// =============================
-// 地震データ（Python生成）
-// =============================
-var eqData = __EQ_JSON__;
-
-// =============================
-// マーカー描画
-// =============================
-var customLayer = L.geoJSON(null, {
-    pointToLayer: function (feature, latlng) {
-        return L.circleMarker(latlng, feature.properties.style);
-    },
-    onEachFeature: function (feature, layer) {
-        var t = new Date(feature.properties.times[0]);
-        var jst = new Date(t.getTime() + 9*3600*1000);
-
-        layer.bindPopup(
-            "<b>Time (JST):</b> " + jst.toLocaleString() + "<br>" +
-            "<b>Magnitude:</b> " + feature.properties.mag + "<br>" +
-            "<b>Depth:</b> " + feature.properties.depth + " km"
-        );
-    }
-});
-
-// ★ これがないとアニメーションしない
-customLayer.addData(eqData);
-
-// TimeDimension レイヤー
-var tdLayer = L.timeDimension.layer.geoJson(customLayer, {
-    updateTimeDimension: true,
-    addlastPoint: false,
-    duration: "P30D"
-}).addTo(map);
-
-// 自動再生
-map.timeDimension.on("availabletimeschanged", function() {
-    setTimeout(() => {
-        map.timeDimension.player.start();
-    }, 400);
-});
-</script>
-</body>
-</html>
-"""
-
-# GeoJSON 埋め込み
-html_output = html_template.replace("__EQ_JSON__", eq_json)
-
-with open("index.html", "w", encoding="utf-8") as f:
-    f.write(html_output)
-
-print("✔ index.html を生成しました！ GitHub Pages に置けば動きます。")
+print("完成: eq_final.html")
