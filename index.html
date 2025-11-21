@@ -13,18 +13,19 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet-timedimension@1.1.0/dist/leaflet.timedimension.control.min.css" />
 <script src="https://cdn.jsdelivr.net/npm/leaflet-timedimension@1.1.0/dist/leaflet.timedimension.min.js"></script>
 
-<!-- Chart.js for timeseries -->
+<!-- Chart.js -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
 <style>
   html,body,#map { height:100%; margin:0; padding:0; }
   #map { width:100%; height:100vh; }
-  /* UI */
+
+  /* ===== UIパネル ===== */
   #panel {
     position: fixed;
     top: 10px;
     left: 10px;
-    z-index: 1200;
+    z-index: 2500;
     width: 240px;
     background: rgba(255,255,255,0.95);
     border: 1px solid #444;
@@ -32,11 +33,13 @@
     border-radius: 6px;
     font-size: 13px;
   }
+
+  /* ===== 凡例 ===== */
   #legend {
     position: fixed;
     top: 10px;
     right: 10px;
-    z-index: 1200;
+    z-index: 2500;
     background: rgba(255,255,255,0.95);
     border:1px solid #444;
     padding:8px;
@@ -46,6 +49,8 @@
   .sw {
     display:inline-block;width:14px;height:14px;border-radius:7px;margin-right:6px;vertical-align:middle;
   }
+
+  /* ===== グラフ ===== */
   #chartBox {
     position: fixed;
     bottom: 0;
@@ -55,19 +60,26 @@
     background: rgba(255,255,255,0.97);
     border-top: 1px solid #ccc;
     display: none;
-    z-index: 1200;
+    z-index: 2500;
     padding: 6px;
   }
   #chartBox canvas { width:100%; height:100%; }
-  .small { font-size:12px; color:#333; }
-  .btn { padding:6px 8px; margin:4px 0; display:inline-block; cursor:pointer; border-radius:4px; border:1px solid #666; background:#eee; }
+
+  .small { font-size:12px; }
+  .btn { padding:6px 8px; margin:4px 0; cursor:pointer; border-radius:4px; border:1px solid #666; background:#eee; }
+
+  /* ===== TimeDimension UIを最前面に固定 ===== */
+  .leaflet-control-timecontrol {
+      z-index: 3000 !important;
+  }
+
 </style>
 </head>
 <body>
 
 <div id="map"></div>
 
-<!-- UI -->
+<!-- ===== パネル ===== -->
 <div id="panel">
   <b>表示設定</b><br>
   <div class="small">（固定: 過去30日・M≥3.0・6時間刻み）</div>
@@ -76,19 +88,22 @@
   <label><input type="checkbox" id="midToggle" checked> 中 (70–300km)</label><br>
   <label><input type="checkbox" id="deepToggle" checked> 深い (300+ km)</label><br>
   <hr/>
+
   <div class="small"><b>再生速度</b></div>
   <select id="speedSelect">
     <option value="400">速い</option>
     <option value="1200" selected>標準</option>
     <option value="2500">遅い</option>
-  </select><br><br>
+  </select>
+  <br><br>
 
   <div class="small"><b>地図テーマ</b></div>
   <select id="themeSelect">
     <option value="light" selected>ライト</option>
     <option value="dark">ダーク</option>
     <option value="sat">衛星</option>
-  </select><br><br>
+  </select>
+  <br><br>
 
   <div class="small"><b>地域ジャンプ</b></div>
   <select id="jumpSelect">
@@ -97,16 +112,15 @@
     <option value="japan">日本</option>
     <option value="usa">米国西海岸</option>
     <option value="sea">東南アジア</option>
-  </select><br><br>
+  </select>
+  <br><br>
 
   <div class="small"><b>表示切替</b></div>
   <button id="toggleChart" class="btn">時系列グラフ ON/OFF</button>
   <button id="togglePlates" class="btn">プレート境界 ON/OFF</button>
-  <div style="margin-top:8px;" class="small">マグニチュード区分:</div>
-  <div class="small">M3.0–3.9 / M4.0–4.9 / M5.0–5.9 / M6.0–6.9 / M7.0+</div>
 </div>
 
-<!-- Legend -->
+<!-- ===== 凡例 ===== -->
 <div id="legend">
   <div style="font-weight:bold;">深さの凡例</div>
   <div style="margin-top:6px;">
@@ -116,107 +130,62 @@
   </div>
 </div>
 
-<!-- Chart -->
+<!-- ===== グラフ ===== -->
 <div id="chartBox"><canvas id="eqChart"></canvas></div>
 
 <script>
-/* -----------------------------
-   uploaded file path (tool will transform)
-   ----------------------------- */
-const UPLOADED_FILE_PATH = "/mnt/data/2e0e064b-2ec6-4054-95b7-fbdf89c58667.png";
-
-/* -----------------------------
-   settings
-   ----------------------------- */
 const GEOJSON_URL = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_month.geojson";
 const MIN_MAG = 3.0;
-const STEP_MS = 6 * 3600 * 1000; // 6 hours
+const STEP_MS = 6 * 3600 * 1000;
 const TIME_PERIOD = "PT6H";
 
-/* -----------------------------
-   map & base layers
-   ----------------------------- */
 const map = L.map('map', { center:[20,0], zoom:2 });
+const baseLight = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png').addTo(map);
+const baseDark  = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png');
+const baseSat   = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png');
 
-const baseLight = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { attribution: '&copy; OpenStreetMap & CartoDB' });
-const baseDark  = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { attribution: '&copy; OpenStreetMap & CartoDB' });
-const baseSat   = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png'); // light substitute for satellite
-
-baseLight.addTo(map);
-
-/* -----------------------------
-   helper color / radius
-   ----------------------------- */
 function depthColorSimple(d) {
-  if (d == null) return "#999";
-  if (d < 70) return "#ff3b30";      // red
-  if (d < 300) return "#ffcc00";     // yellow
-  return "#007bff";                  // blue
+  if (d < 70) return "#ff3b30";
+  if (d < 300) return "#ffcc00";
+  return "#007bff";
 }
-function magRadius(m) {
-  if (!m || isNaN(m)) return 3;
-  return 2 + m * 2;
-}
+function magRadius(m) { return 2 + m * 2; }
 
-/* -----------------------------
-   TimeDimension instance
-   ----------------------------- */
 const td = new L.TimeDimension({ period: TIME_PERIOD });
 map.timeDimension = td;
 
-/* We'll create one TimeDimension layer per depth-category (shallow/mid/deep).
-   Each is a geoJson layer wrapped by timeDimension.layer.geoJson */
-
-/* containers for layers */
-let tdLayers = { shallow: null, mid: null, deep: null };
-let rawGeo = { shallow: null, mid: null, deep: null };
-
-/* track plates and chart */
+let tdLayers = { shallow:null, mid:null, deep:null };
 let plateLayer = null;
 let chart = null;
 let chartShown = false;
 
-/* fetch data and build layers */
 async function loadData() {
-  const r = await fetch(GEOJSON_URL);
-  const feed = await r.json();
+  const feed = await (await fetch(GEOJSON_URL)).json();
+  const features = feed.features.filter(f => f.properties.mag >= MIN_MAG);
 
-  // filter by min mag and create per-depth features
-  const now = Date.now();
-  const features = (feed.features || []).filter(f => (f.properties && f.properties.mag >= MIN_MAG));
-
-  // convert each feature to our structure (with floored time)
   const shallow = [], mid = [], deep = [];
-  for (const f of features) {
-    const p = f.properties || {};
-    const c = (f.geometry && f.geometry.coordinates) || [];
-    const lon = c[0], lat = c[1], depth = c[2];
-    const mag = p.mag;
-    const timeMs = p.time;
-    if (!timeMs || !lon || !lat) continue;
 
-    // floor to 6h
-    const tFloored = new Date(Math.floor(timeMs / STEP_MS) * STEP_MS).toISOString();
+  for (let f of features) {
+    const p = f.properties;
+    const [lon, lat, depth] = f.geometry.coordinates;
+    const t = new Date(Math.floor(p.time / STEP_MS) * STEP_MS).toISOString();
 
     const feat = {
-      type: "Feature",
-      geometry: { type: "Point", coordinates: [lon, lat] },
-      properties: Object.assign({}, p, {
-        times: [tFloored],
-        _style: {
-          radius: magRadius(mag),
+      type:"Feature",
+      geometry:{ type:"Point", coordinates:[lon, lat] },
+      properties:{
+        times:[t],
+        _style:{
+          radius: magRadius(p.mag),
           fillColor: depthColorSimple(depth),
           color: depthColorSimple(depth),
           fillOpacity: 0.8
         },
-        // popup: JST time, mag, depth
-        _popup: `<div style="min-width:180px;">
-                   <b>${p.place || "不明な場所"}</b><br/>
-                   <b>時刻 (JST):</b> ${new Date(timeMs + 9*3600*1000).toLocaleString()}<br/>
-                   <b>マグニチュード:</b> ${mag}<br/>
-                   <b>深さ:</b> ${depth} km
-                 </div>`
-      })
+        _popup: `<b>${p.place}</b><br>
+                 <b>時刻(JST):</b> ${new Date(p.time+9*3600*1000).toLocaleString()}<br>
+                 <b>M:</b> ${p.mag}<br>
+                 <b>深さ:</b> ${depth} km`
+      }
     };
 
     if (depth < 70) shallow.push(feat);
@@ -224,178 +193,100 @@ async function loadData() {
     else deep.push(feat);
   }
 
-  rawGeo.shallow = { type:"FeatureCollection", features: shallow };
-  rawGeo.mid     = { type:"FeatureCollection", features: mid };
-  rawGeo.deep    = { type:"FeatureCollection", features: deep };
-
-  // create td layers
-  createTdLayer('shallow', rawGeo.shallow);
-  createTdLayer('mid', rawGeo.mid);
-  createTdLayer('deep', rawGeo.deep);
+  createTD("shallow", shallow);
+  createTD("mid", mid);
+  createTD("deep", deep);
 }
 
-/* create a TimeDimension layer for a depth category */
-function createTdLayer(key, geojson) {
-  const geo = L.geoJson(geojson, {
-    pointToLayer: function(feature, latlng) {
-      const s = feature.properties && feature.properties._style;
-      return L.circleMarker(latlng, {
-        radius: s ? s.radius : 4,
-        fillColor: s ? s.fillColor : '#f03',
-        color: s ? s.color : '#f03',
-        weight: 0.4,
-        fillOpacity: s ? s.fillOpacity : 0.8,
-        pane: 'overlayPane'
-      }).bindPopup(feature.properties && feature.properties._popup);
-    }
+function createTD(key, list) {
+  const geo = L.geoJson({type:"FeatureCollection", features:list}, {
+    pointToLayer:(f,latlng)=> L.circleMarker(latlng, f.properties._style).bindPopup(f.properties._popup)
   });
 
-  const tdLayer = L.timeDimension.layer.geoJson(geo, {
-    updateTimeDimension: true,
-    addlastPoint: false,
-    duration: "P1M" // fade-out after 1 month
+  tdLayers[key] = L.timeDimension.layer.geoJson(geo, {
+    updateTimeDimension:true,
+    duration:"P1M"
   });
 
-  tdLayers[key] = tdLayer;
-  tdLayer.addTo(map);
+  tdLayers[key].addTo(map);
 }
 
-/* -----------------------------
-   UI events
-   ----------------------------- */
-document.getElementById('shallowToggle').addEventListener('change', function(e){
-  toggleTdLayer('shallow', e.target.checked);
-});
-document.getElementById('midToggle').addEventListener('change', function(e){
-  toggleTdLayer('mid', e.target.checked);
-});
-document.getElementById('deepToggle').addEventListener('change', function(e){
-  toggleTdLayer('deep', e.target.checked);
-});
-function toggleTdLayer(key, on) {
-  const l = tdLayers[key];
-  if (!l) return;
-  if (on) {
-    if (!map.hasLayer(l)) l.addTo(map);
-  } else {
-    if (map.hasLayer(l)) map.removeLayer(l);
-  }
+document.getElementById('shallowToggle').onchange = e => toggleTD("shallow", e.target.checked);
+document.getElementById('midToggle').onchange     = e => toggleTD("mid", e.target.checked);
+document.getElementById('deepToggle').onchange    = e => toggleTD("deep", e.target.checked);
+
+function toggleTD(key, on) {
+  if (on) tdLayers[key].addTo(map);
+  else map.removeLayer(tdLayers[key]);
 }
 
-/* speed control */
-document.getElementById('speedSelect').addEventListener('change', function(e){
-  const val = Number(e.target.value);
-  // control via timeDimension control options if present
-  const controls = document.getElementsByClassName('td-play');
-  // Fallback: set playback speed by changing frame rate when animating
-  // We'll set timeDimension's animation delay via control if available (TimeDimension control not exposed easily here)
-  // Instead adjust the duration per frame by setting a variable used in play button below (we implement simple play/pause)
-});
+document.getElementById('themeSelect').onchange = e=>{
+  map.removeLayer(baseLight); map.removeLayer(baseDark); map.removeLayer(baseSat);
+  if (e.target.value==="light") baseLight.addTo(map);
+  if (e.target.value==="dark") baseDark.addTo(map);
+  if (e.target.value==="sat") baseSat.addTo(map);
+};
 
-/* theme control */
-document.getElementById('themeSelect').addEventListener('change', function(e){
+document.getElementById('jumpSelect').onchange = e=>{
   const v = e.target.value;
-  if (v === 'light') { map.removeLayer(baseDark); map.removeLayer(baseSat); baseLight.addTo(map); }
-  if (v === 'dark') { map.removeLayer(baseLight); map.removeLayer(baseSat); baseDark.addTo(map); }
-  if (v === 'sat')  { map.removeLayer(baseLight); map.removeLayer(baseDark); baseSat.addTo(map); }
-});
-
-/* jump select */
-document.getElementById('jumpSelect').addEventListener('change', function(e){
-  const v = e.target.value;
-  if (v === 'japan') map.setView([36,137],4);
-  else if (v === 'usa') map.setView([37,-120],4);
-  else if (v === 'eu') map.setView([50,10],4);
-  else if (v === 'sea') map.setView([5,110],4);
+  if (v==="japan") map.setView([36,137],4);
+  else if (v==="usa") map.setView([37,-120],4);
+  else if (v==="sea") map.setView([5,110],4);
   else map.setView([20,0],2);
-});
+};
 
-/* plate toggle */
-document.getElementById('togglePlates').addEventListener('click', function(){
+document.getElementById('togglePlates').onclick = ()=>{
   if (!plateLayer) {
     fetch("https://raw.githubusercontent.com/fraxen/tectonicplates/master/GeoJSON/PB2002_boundaries.json")
-      .then(r=>r.json())
-      .then(j=>{
-        plateLayer = L.geoJson(j, { style:{ color:'#ffdd57', weight:2 }});
+      .then(r=>r.json()).then(j=>{
+        plateLayer = L.geoJson(j,{style:{color:"#ffdd57",weight:2}});
         plateLayer.addTo(map);
       });
   } else {
     if (map.hasLayer(plateLayer)) map.removeLayer(plateLayer);
     else plateLayer.addTo(map);
   }
-});
+};
 
-/* chart toggle */
-document.getElementById('toggleChart').addEventListener('click', function(){
+document.getElementById('toggleChart').onclick = ()=>{
   chartShown = !chartShown;
-  document.getElementById('chartBox').style.display = chartShown ? 'block' : 'none';
+  document.getElementById('chartBox').style.display = chartShown ? "block" : "none";
   if (chartShown) buildChart();
-});
+};
 
-/* -----------------------------
-   TimeDimension control (bottom-left)
-   ----------------------------- */
-const tdControl = new L.Control.TimeDimension({
-  position: 'bottomleft',
-  autoPlay: true,
-  loopButton: true,
-  timeSlider: true,
-  speedSlider: true,
-  playerOptions: { transitionTime: 1000, loop: true, startOver: false, frameRate: 1 }
-});
-map.addControl(tdControl);
-
-/* Control for dynamically setting step speed */
-const speedSelect = document.getElementById('speedSelect');
-speedSelect.addEventListener('change', () => {
-  const ms = Number(speedSelect.value);
-  // When using built-in control, we adjust transitionTime
-  try {
-    tdControl.playerOptions = Object.assign({}, tdControl.playerOptions, { transitionTime: ms });
-  } catch(e){ /* ignore if not writable */ }
-});
-
-/* -----------------------------
-   Chart: daily counts
-   ----------------------------- */
-async function buildChart() {
-  const resp = await fetch(GEOJSON_URL);
-  const feed = await resp.json();
+async function buildChart(){
+  const feed = await (await fetch(GEOJSON_URL)).json();
   const counts = {};
-  for (const f of feed.features) {
-    if (!f.properties || f.properties.mag < MIN_MAG) continue;
+  feed.features.forEach(f=>{
+    if (f.properties.mag < MIN_MAG) return;
     const day = new Date(f.properties.time).toISOString().slice(0,10);
-    counts[day] = (counts[day] || 0) + 1;
-  }
+    counts[day] = (counts[day]||0)+1;
+  });
   const labels = Object.keys(counts).sort();
-  const data = labels.map(l => counts[l] || 0);
-  const ctx = document.getElementById('eqChart').getContext('2d');
+  const data = labels.map(k=>counts[k]);
+
   if (chart) chart.destroy();
-  chart = new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels: labels,
-      datasets: [{ label: '日別地震数 (M≥3.0)', data: data, backgroundColor: 'rgba(30,144,255,0.7)' }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false
-    }
+  chart = new Chart(document.getElementById("eqChart"), {
+    type:"bar",
+    data:{ labels, datasets:[{ label:"日別地震数", data }] },
+    options:{ responsive:true, maintainAspectRatio:false }
   });
 }
 
-/* -----------------------------
-   initialize
-   ----------------------------- */
+const tdControl = new L.Control.TimeDimension({
+  position: "bottomleft",
+  autoPlay:true,
+  loopButton:true,
+  speedSlider:true,
+  timeSlider:true
+});
+map.addControl(tdControl);
+
+document.getElementById('speedSelect').onchange = ()=>{
+  tdControl._player.setTransitionTime(Number(speedSelect.value));
+};
+
 loadData();
-
-/* -----------------------------
-   Performance notes:
-   - We separated features into 3 TimeDimension layers (depth categories) to allow toggling without rebuilding.
-   - We filtered by M>=3.0 on load.
-   - We floored times to 6-hour buckets to keep frames moderate.
-   ----------------------------- */
-
 </script>
 </body>
 </html>
