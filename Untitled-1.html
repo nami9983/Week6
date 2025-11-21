@@ -12,51 +12,73 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet-timedimension/dist/leaflet.timedimension.control.min.css" />
 <script src="https://cdn.jsdelivr.net/npm/leaflet-timedimension/dist/leaflet.timedimension.min.js"></script>
 
-<!-- jQuery（地震リスト用） -->
+<!-- jQuery -->
 <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 
 <style>
-  html, body { height: 100%; margin: 0; }
-  #map { width: 70%; height: 100%; float: left; }
-  #list { width: 30%; height: 100%; float: left; overflow-y: scroll; border-left: 2px solid #ccc; padding: 10px; }
+  html, body {
+      height: 100%;
+      margin: 0;
+  }
+  #map {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      top: 0; left: 0;
+  }
 
-  /* TimeDimension UI を最前面へ */
-  .leaflet-control-timecontrol {
-      z-index: 2000 !important;
+  /* リストを右上パネルに */
+  #list {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      width: 340px;
+      max-height: 70%;
+      background: rgba(255,255,255,0.9);
+      border-radius: 8px;
+      padding: 10px;
+      overflow-y: auto;
+      box-shadow: 0 0 10px rgba(0,0,0,0.3);
+      z-index: 2000;
   }
 
   table { width: 100%; border-collapse: collapse; }
   th, td { padding: 6px; border-bottom: 1px solid #aaa; }
   th { background: #eee; }
+
+  /* TimeDimension UI を最前面 */
+  .leaflet-control-timecontrol {
+      z-index: 3000 !important;
+  }
 </style>
 
 </head>
 <body>
 
 <div id="map"></div>
+
+<!-- 右上パネル -->
 <div id="list">
-  <h2>地震リスト（30日・M3+）</h2>
+  <h3>地震リスト（30日・M3+）</h3>
   <table id="eqTable">
     <thead>
-      <tr><th>日時(JST)</th><th>M</th><th>深さkm</th><th>場所</th></tr>
+      <tr><th>日時(JST)</th><th>M</th><th>深さ</th><th>場所</th></tr>
     </thead>
     <tbody></tbody>
   </table>
 </div>
 
 <script>
-// ==========================
-// ① データ取得（USGS）
-// ==========================
+
+// ========== ① USGS データ ==========
 const url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_month.geojson";
 
 fetch(url)
   .then(res => res.json())
   .then(data => initMap(data));
 
-// ==========================
-// ② 地図を作成
-// ==========================
+
+// ========== ② 地図 ==========
 function initMap(geojson) {
 
   const map = L.map('map', {
@@ -72,7 +94,6 @@ function initMap(geojson) {
       attribution: '© OpenStreetMap contributors'
   }).addTo(map);
 
-  // 再生コントローラー
   const timeControl = new L.Control.TimeDimension({
       position: "bottomleft",
       autoPlay: true,
@@ -82,9 +103,8 @@ function initMap(geojson) {
 
   map.addControl(timeControl);
 
-  // ==========================
-  // ③ マーカーの色とサイズ
-  // ==========================
+
+  // 色分け
   function getColor(depth) {
       if (depth < 70) return "red";
       if (depth < 300) return "yellow";
@@ -92,41 +112,39 @@ function initMap(geojson) {
   }
 
   function style(feature) {
+      const depth = feature.geometry.coordinates[2];
       return {
           radius: 4 + feature.properties.mag * 2,
-          color: getColor(feature.geometry.coordinates[2]),
-          fillColor: getColor(feature.geometry.coordinates[2]),
+          color: getColor(depth),
+          fillColor: getColor(depth),
           fillOpacity: 0.6
       };
   }
 
-  // ==========================
-  // ④ GeoJSON → TimeDimensionLayer
-  // ==========================
+
+  // ========== ③ マーカー & リスト作成 ==========
   const geoLayer = L.geoJson(geojson, {
       pointToLayer: function(feature, latlng) {
           return L.circleMarker(latlng, style(feature));
       },
       onEachFeature: function(feature, layer) {
 
-          // 日本時間へ
-          const jst = new Date(feature.properties.time + 9 * 3600 * 1000);
-          const jstStr = jst.toISOString().replace("T", " ").slice(0, 19);
-
           const depth = feature.geometry.coordinates[2];
           const mag = feature.properties.mag;
           const place = feature.properties.place;
 
-          // ポップアップ
+          // 日本時間
+          const jst = new Date(feature.properties.time + 9 * 3600 * 1000);
+          const jstStr = jst.toISOString().replace("T"," ").substring(0,19);
+
           layer.bindPopup(
               `<b>${place}</b><br>
-              日時(JST): ${jstStr}<br>
+              JST: ${jstStr}<br>
               M: ${mag}<br>
               深さ: ${depth} km`
           );
 
-          // リストへ追加
-          addTableRow(jstStr, mag, depth, place, layer);
+          addRow(jstStr, mag, depth, place, layer);
       }
   });
 
@@ -138,23 +156,23 @@ function initMap(geojson) {
   tdLayer.addTo(map);
 }
 
-// ==========================
-// ⑤ 地震リストを作成
-// ==========================
-function addTableRow(jst, mag, depth, place, layer) {
+
+// ========== ④ リストへ追加 ==========
+function addRow(jst, mag, depth, place, layer) {
+
     const row = `
-      <tr class="rowItem">
-          <td>${jst}</td>
-          <td>${mag}</td>
-          <td>${depth}</td>
-          <td>${place}</td>
+      <tr>
+        <td>${jst}</td>
+        <td>${mag}</td>
+        <td>${depth}</td>
+        <td>${place}</td>
       </tr>
     `;
 
     $("#eqTable tbody").append(row);
 
-    // 行をクリック → 該当地点へ飛ぶ
-    $("#eqTable tbody tr:last").on("click", function() {
+    // クリックでジャンプ
+    $("#eqTable tbody tr:last").on("click", function () {
         layer.openPopup();
     });
 }
