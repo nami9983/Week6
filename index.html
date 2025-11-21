@@ -1,292 +1,136 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html>
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>地震アニメーション（M≥3.0, 30日, 6時間刻み）</title>
+<title>Earthquake Animation (JST + AutoPlay + Plates)</title>
 
 <!-- Leaflet -->
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
 <!-- TimeDimension -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet-timedimension@1.1.0/dist/leaflet.timedimension.control.min.css" />
-<script src="https://cdn.jsdelivr.net/npm/leaflet-timedimension@1.1.0/dist/leaflet.timedimension.min.js"></script>
-
-<!-- Chart.js -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet-timedimension/1.1.0/leaflet.timedimension.control.min.css" />
 
 <style>
-  html,body,#map { height:100%; margin:0; padding:0; }
-  #map { width:100%; height:100vh; }
+html, body { margin:0; padding:0; height:100%; }
+#map { width:100%; height:100%; }
 
-  /* ===== UIパネル ===== */
-  #panel {
-    position: fixed;
-    top: 10px;
-    left: 10px;
-    z-index: 2500;
-    width: 240px;
-    background: rgba(255,255,255,0.95);
-    border: 1px solid #444;
-    padding: 10px;
-    border-radius: 6px;
-    font-size: 13px;
-  }
+/* UI を最前面に固定 */
+.leaflet-control-container {
+    z-index: 9999 !important;
+}
 
-  /* ===== 凡例 ===== */
-  #legend {
-    position: fixed;
+/* 凡例 */
+.legend {
+    position: absolute;
     top: 10px;
     right: 10px;
-    z-index: 2500;
-    background: rgba(255,255,255,0.95);
-    border:1px solid #444;
-    padding:8px;
-    border-radius:6px;
-    font-size:13px;
-  }
-  .sw {
-    display:inline-block;width:14px;height:14px;border-radius:7px;margin-right:6px;vertical-align:middle;
-  }
-
-  /* ===== グラフ ===== */
-  #chartBox {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 220px;
-    background: rgba(255,255,255,0.97);
-    border-top: 1px solid #ccc;
-    display: none;
-    z-index: 2500;
-    padding: 6px;
-  }
-  #chartBox canvas { width:100%; height:100%; }
-
-  .small { font-size:12px; }
-  .btn { padding:6px 8px; margin:4px 0; cursor:pointer; border-radius:4px; border:1px solid #666; background:#eee; }
-
-  /* ===== TimeDimension UIを最前面に固定 ===== */
-  .leaflet-control-timecontrol {
-      z-index: 3000 !important;
-  }
+    background: white;
+    padding: 10px;
+    border-radius: 6px;
+    font-size: 14px;
+    line-height: 1.3em;
+    box-shadow: 0 0 6px rgba(0,0,0,0.3);
+    z-index: 9999;
+}
 
 </style>
 </head>
+
 <body>
-
 <div id="map"></div>
-
-<!-- ===== パネル ===== -->
-<div id="panel">
-  <b>表示設定</b><br>
-  <div class="small">（固定: 過去30日・M≥3.0・6時間刻み）</div>
-  <hr/>
-  <label><input type="checkbox" id="shallowToggle" checked> 浅い (0–70km)</label><br>
-  <label><input type="checkbox" id="midToggle" checked> 中 (70–300km)</label><br>
-  <label><input type="checkbox" id="deepToggle" checked> 深い (300+ km)</label><br>
-  <hr/>
-
-  <div class="small"><b>再生速度</b></div>
-  <select id="speedSelect">
-    <option value="400">速い</option>
-    <option value="1200" selected>標準</option>
-    <option value="2500">遅い</option>
-  </select>
-  <br><br>
-
-  <div class="small"><b>地図テーマ</b></div>
-  <select id="themeSelect">
-    <option value="light" selected>ライト</option>
-    <option value="dark">ダーク</option>
-    <option value="sat">衛星</option>
-  </select>
-  <br><br>
-
-  <div class="small"><b>地域ジャンプ</b></div>
-  <select id="jumpSelect">
-    <option value="">—</option>
-    <option value="world">世界</option>
-    <option value="japan">日本</option>
-    <option value="usa">米国西海岸</option>
-    <option value="sea">東南アジア</option>
-  </select>
-  <br><br>
-
-  <div class="small"><b>表示切替</b></div>
-  <button id="toggleChart" class="btn">時系列グラフ ON/OFF</button>
-  <button id="togglePlates" class="btn">プレート境界 ON/OFF</button>
+<div class="legend">
+<b>深さ（Depth）</b><br>
+<span style="color:#ff0000;">●</span> 浅い（0–70km）<br>
+<span style="color:#ffaa00;">●</span> 中間（70–300km）<br>
+<span style="color:#0000ff;">●</span> 深い（300km+）<br>
 </div>
 
-<!-- ===== 凡例 ===== -->
-<div id="legend">
-  <div style="font-weight:bold;">深さの凡例</div>
-  <div style="margin-top:6px;">
-    <div><span class="sw" style="background:#ff3b30"></span>浅い (0–70 km)</div>
-    <div><span class="sw" style="background:#ffcc00"></span>中 (70–300 km)</div>
-    <div><span class="sw" style="background:#007bff"></span>深い (300+ km)</div>
-  </div>
-</div>
-
-<!-- ===== グラフ ===== -->
-<div id="chartBox"><canvas id="eqChart"></canvas></div>
+<!-- scripts -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-timedimension/1.1.0/leaflet.timedimension.min.js"></script>
 
 <script>
-const GEOJSON_URL = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_month.geojson";
-const MIN_MAG = 3.0;
-const STEP_MS = 6 * 3600 * 1000;
-const TIME_PERIOD = "PT6H";
 
-const map = L.map('map', { center:[20,0], zoom:2 });
-const baseLight = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png').addTo(map);
-const baseDark  = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png');
-const baseSat   = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png');
-
-function depthColorSimple(d) {
-  if (d < 70) return "#ff3b30";
-  if (d < 300) return "#ffcc00";
-  return "#007bff";
-}
-function magRadius(m) { return 2 + m * 2; }
-
-const td = new L.TimeDimension({ period: TIME_PERIOD });
-map.timeDimension = td;
-
-let tdLayers = { shallow:null, mid:null, deep:null };
-let plateLayer = null;
-let chart = null;
-let chartShown = false;
-
-async function loadData() {
-  const feed = await (await fetch(GEOJSON_URL)).json();
-  const features = feed.features.filter(f => f.properties.mag >= MIN_MAG);
-
-  const shallow = [], mid = [], deep = [];
-
-  for (let f of features) {
-    const p = f.properties;
-    const [lon, lat, depth] = f.geometry.coordinates;
-    const t = new Date(Math.floor(p.time / STEP_MS) * STEP_MS).toISOString();
-
-    const feat = {
-      type:"Feature",
-      geometry:{ type:"Point", coordinates:[lon, lat] },
-      properties:{
-        times:[t],
-        _style:{
-          radius: magRadius(p.mag),
-          fillColor: depthColorSimple(depth),
-          color: depthColorSimple(depth),
-          fillOpacity: 0.8
-        },
-        _popup: `<b>${p.place}</b><br>
-                 <b>時刻(JST):</b> ${new Date(p.time+9*3600*1000).toLocaleString()}<br>
-                 <b>M:</b> ${p.mag}<br>
-                 <b>深さ:</b> ${depth} km`
-      }
-    };
-
-    if (depth < 70) shallow.push(feat);
-    else if (depth < 300) mid.push(feat);
-    else deep.push(feat);
-  }
-
-  createTD("shallow", shallow);
-  createTD("mid", mid);
-  createTD("deep", deep);
-}
-
-function createTD(key, list) {
-  const geo = L.geoJson({type:"FeatureCollection", features:list}, {
-    pointToLayer:(f,latlng)=> L.circleMarker(latlng, f.properties._style).bindPopup(f.properties._popup)
-  });
-
-  tdLayers[key] = L.timeDimension.layer.geoJson(geo, {
-    updateTimeDimension:true,
-    duration:"P1M"
-  });
-
-  tdLayers[key].addTo(map);
-}
-
-document.getElementById('shallowToggle').onchange = e => toggleTD("shallow", e.target.checked);
-document.getElementById('midToggle').onchange     = e => toggleTD("mid", e.target.checked);
-document.getElementById('deepToggle').onchange    = e => toggleTD("deep", e.target.checked);
-
-function toggleTD(key, on) {
-  if (on) tdLayers[key].addTo(map);
-  else map.removeLayer(tdLayers[key]);
-}
-
-document.getElementById('themeSelect').onchange = e=>{
-  map.removeLayer(baseLight); map.removeLayer(baseDark); map.removeLayer(baseSat);
-  if (e.target.value==="light") baseLight.addTo(map);
-  if (e.target.value==="dark") baseDark.addTo(map);
-  if (e.target.value==="sat") baseSat.addTo(map);
-};
-
-document.getElementById('jumpSelect').onchange = e=>{
-  const v = e.target.value;
-  if (v==="japan") map.setView([36,137],4);
-  else if (v==="usa") map.setView([37,-120],4);
-  else if (v==="sea") map.setView([5,110],4);
-  else map.setView([20,0],2);
-};
-
-document.getElementById('togglePlates').onclick = ()=>{
-  if (!plateLayer) {
-    fetch("https://raw.githubusercontent.com/fraxen/tectonicplates/master/GeoJSON/PB2002_boundaries.json")
-      .then(r=>r.json()).then(j=>{
-        plateLayer = L.geoJson(j,{style:{color:"#ffdd57",weight:2}});
-        plateLayer.addTo(map);
-      });
-  } else {
-    if (map.hasLayer(plateLayer)) map.removeLayer(plateLayer);
-    else plateLayer.addTo(map);
-  }
-};
-
-document.getElementById('toggleChart').onclick = ()=>{
-  chartShown = !chartShown;
-  document.getElementById('chartBox').style.display = chartShown ? "block" : "none";
-  if (chartShown) buildChart();
-};
-
-async function buildChart(){
-  const feed = await (await fetch(GEOJSON_URL)).json();
-  const counts = {};
-  feed.features.forEach(f=>{
-    if (f.properties.mag < MIN_MAG) return;
-    const day = new Date(f.properties.time).toISOString().slice(0,10);
-    counts[day] = (counts[day]||0)+1;
-  });
-  const labels = Object.keys(counts).sort();
-  const data = labels.map(k=>counts[k]);
-
-  if (chart) chart.destroy();
-  chart = new Chart(document.getElementById("eqChart"), {
-    type:"bar",
-    data:{ labels, datasets:[{ label:"日別地震数", data }] },
-    options:{ responsive:true, maintainAspectRatio:false }
-  });
-}
-
-const tdControl = new L.Control.TimeDimension({
-  position: "bottomleft",
-  autoPlay:true,
-  loopButton:true,
-  speedSlider:true,
-  timeSlider:true
+// =============================
+// 地図
+// =============================
+var map = L.map('map', {
+    zoom: 2,
+    center: [20, 0],
+    timeDimension: true,
+    timeDimensionControl: true,
+    timeDimensionControlOptions: {
+        autoPlay: true,
+        loopButton: true,
+        minSpeed: 1,
+        maxSpeed: 10,
+        speedStep: 1,
+        playReverseButton: false
+    }
 });
-map.addControl(tdControl);
 
-document.getElementById('speedSelect').onchange = ()=>{
-  tdControl._player.setTransitionTime(Number(speedSelect.value));
-};
+L.tileLayer(
+    "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+    { attribution: "CartoDB" }
+).addTo(map);
 
-loadData();
+
+// =============================
+// プレート境界（PB2002）
+// =============================
+var plateURL = "https://raw.githubusercontent.com/fraxen/tectonicplates/master/GeoJSON/PB2002_boundaries.json";
+
+fetch(plateURL)
+  .then(r => r.json())
+  .then(data => {
+      L.geoJSON(data, {
+          style: { color: "#ff00ff", weight: 2 }
+      }).addTo(map);
+  });
+
+
+// =============================
+// 地震データ（Python で埋め込んでください）
+// =============================
+var eqData = __EQ_JSON__;   // ← Python の TimestampedGeoJson で生成した GeoJSON を埋め込む
+
+
+// =============================
+// マーカー描画
+// =============================
+var customLayer = L.geoJSON(null, {
+    pointToLayer: function (feature, latlng) {
+        return L.circleMarker(latlng, feature.properties.style);
+    },
+    onEachFeature: function (feature, layer) {
+        // JST 表示
+        var t = new Date(feature.properties.times[0]);
+        var jst = new Date(t.getTime() + 9*3600*1000);
+
+        layer.bindPopup(
+            "<b>Time (JST):</b> " + jst.toLocaleString() + "<br>" +
+            "<b>Magnitude:</b> " + feature.properties.mag + "<br>" +
+            "<b>Depth:</b> " + feature.properties.depth + " km"
+        );
+    }
+});
+
+var tdLayer = L.timeDimension.layer.geoJson(customLayer, {
+    updateTimeDimension: true,
+    addlastPoint: false,
+    duration: "P30D"
+}).addTo(map);
+
+
+// =============================
+// 自動再生（最重要）
+// =============================
+map.timeDimension.on("availabletimeschanged", function() {
+    setTimeout(() => {
+        map.timeDimension.player.start();
+    }, 500);
+});
+
 </script>
 </body>
 </html>
